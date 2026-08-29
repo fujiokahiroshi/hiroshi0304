@@ -46,6 +46,17 @@ Claude DesktopへMCPを再登録する場合:
 - `create_gear_animation`: 2枚の平歯車を歯数比で連動回転させる
 - `create_bevel_gear_animation`: 90度で噛み合う2枚の傘歯車を連動回転させる
 - `create_differential_animation`: オープンデファレンシャルを生成・アニメーション表示する
+- `create_rc_4wd_drivetrain_animation`: Generate the RC 4WD drivetrain with transparent open differentials
+- `list_cad_model_sources`: List readable model.py files from examples and jobs
+- `get_cad_model_source`: Read a model source by safe ID and line range
+- `search_cad_model_sources`: Search across readable CAD Python sources
+- `get_cad_preview`: Capture the current OCP CAD Viewer image for visual inspection
+- `inspect_cad_geometry`: Measure validity, bounds, volume, area, center of mass, and topology
+- `detect_cad_interference`: Detect STEP solid overlaps and optional clearance violations
+- `get_cad_views`: Capture ISO/front/back/left/right/top/bottom views and restore the camera
+- `list_cad_components`: List named Assembly components and their world-space bounds
+- `inspect_component_clearance`: Measure overlap and clearance between named components
+- `show_cad_job`: Redisplay a job and animation in the existing Viewer tab without opening one
 - `get_cad_status`: 最新ジョブとViewer接続状態を確認する
 - `viewer_help`: モデル、工程、アニメーショントラックの形式を確認する
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -7,9 +8,11 @@ import re
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.types import ImageContent, TextContent
 
 from .state import JOBS_DIR, VIEWER_PORT, read_state, viewer_reachable, write_state
 from .validation import validate_code
@@ -22,6 +25,162 @@ mcp = MCPServer(
         "実行中の工程を画面へ逐次反映するため、各工程の直前にcad_step(steps[index])を呼びます。"
     ),
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+RC_4WD_TEMPLATE = PROJECT_ROOT / "examples" / "rc_4wd_drivetrain.py"
+PREVIEW_DIR = PROJECT_ROOT / "runtime" / "previews"
+
+
+def _rc_4wd_drivetrain_code() -> str:
+    return RC_4WD_TEMPLATE.read_text(encoding="utf-8")
+
+MODEL_ID_PATTERN = re.compile(r"^(example|job):([A-Za-z0-9_-]+)$")
+
+
+def _model_source_entries(source: str = "all") -> list[dict[str, Any]]:
+    if source not in {"all", "examples", "jobs"}:
+        raise ValueError("source must be all, examples, or jobs")
+
+    entries: list[dict[str, Any]] = []
+    if source in {"all", "examples"}:
+        examples_dir = PROJECT_ROOT / "examples"
+        for path in examples_dir.glob("*.py"):
+            resolved = path.resolve()
+            stat = resolved.stat()
+            entries.append(
+                {
+                    "model_id": f"example:{resolved.stem}",
+                    "source": "examples",
+                    "name": resolved.stem,
+                    "relative_path": resolved.relative_to(PROJECT_ROOT).as_posix(),
+                    "modified": datetime.fromtimestamp(stat.st_mtime)
+                    .astimezone()
+                    .isoformat(),
+                    "size_bytes": stat.st_size,
+                    "exports": [],
+                    "_path": resolved,
+                }
+            )
+
+    if source in {"all", "jobs"}:
+        for path in JOBS_DIR.glob("*/model.py"):
+            resolved = path.resolve()
+            stat = resolved.stat()
+            exports = [
+                candidate.name
+                for candidate in (resolved.with_name("model.step"), resolved.with_name("model.stl"))
+                if candidate.is_file()
+            ]
+            entries.append(
+                {
+                    "model_id": f"job:{resolved.parent.name}",
+                    "source": "jobs",
+                    "name": resolved.parent.name,
+                    "relative_path": resolved.relative_to(PROJECT_ROOT).as_posix(),
+                    "modified": datetime.fromtimestamp(stat.st_mtime)
+                    .astimezone()
+                    .isoformat(),
+                    "size_bytes": stat.st_size,
+                    "exports": exports,
+                    "_path": resolved,
+                }
+            )
+
+    return sorted(entries, key=lambda item: item["modified"], reverse=True)
+
+
+def _resolve_model_source(model_id: str) -> Path:
+    match = MODEL_ID_PATTERN.fullmatch(model_id)
+    if match is None:
+        raise ValueError("model_id must use example:<name> or job:<name>")
+    source, name = match.groups()
+    if source == "example":
+        candidate = (PROJECT_ROOT / "examples" / f"{name}.py").resolve()
+        allowed_parent = (PROJECT_ROOT / "examples").resolve()
+    else:
+        candidate = (JOBS_DIR / name / "model.py").resolve()
+        allowed_parent = (JOBS_DIR / name).resolve()
+    if candidate.parent != allowed_parent or not candidate.is_file():
+        raise ValueError(f"CAD model source not found: {model_id}")
+    return candidate
+
+def _resolve_step_source(model_id: str | None = None) -> tuple[str, Path]:
+    if model_id is None:
+        candidates = [path.resolve() for path in JOBS_DIR.glob("*/model.step")]
+        if not candidates:
+            raise ValueError("No generated STEP models are available")
+        step_path = max(candidates, key=lambda path: path.stat().st_mtime)
+        return f"job:{step_path.parent.name}", step_path
+
+    match = MODEL_ID_PATTERN.fullmatch(model_id)
+    if match is None or match.group(1) != "job":
+        raise ValueError("geometry inspection requires a job:<name> model_id")
+    name = match.group(2)
+    step_path = (JOBS_DIR / name / "model.step").resolve()
+    allowed_parent = (JOBS_DIR / name).resolve()
+    if step_path.parent != allowed_parent or not step_path.is_file():
+        raise ValueError(f"STEP model not found: {model_id}")
+    return model_id, step_path
+
+
+
+
+
+def _resolve_job_dir(model_id: str | None = None) -> tuple[str, Path]:
+    if model_id is None:
+        candidates = [path.parent.resolve() for path in JOBS_DIR.glob("*/model.py")]
+        if not candidates:
+            raise ValueError("No generated CAD jobs are available")
+        job_dir = max(candidates, key=lambda path: (path / "model.py").stat().st_mtime)
+        model_id = f"job:{job_dir.name}"
+    else:
+        match = MODEL_ID_PATTERN.fullmatch(model_id)
+        if match is None or match.group(1) != "job":
+            raise ValueError("operation requires a job:<name> model_id")
+        job_dir = (JOBS_DIR / match.group(2)).resolve()
+    allowed_parent = JOBS_DIR.resolve()
+    if job_dir.parent != allowed_parent:
+        raise ValueError(f"CAD job not found: {model_id}")
+    if not (job_dir / "model.py").is_file() or not (job_dir / "request.json").is_file():
+        raise ValueError(f"CAD job is incomplete: {model_id}")
+    return model_id, job_dir
+
+
+def _run_job_tool(action: str, job_dir: Path, *arguments: str) -> dict[str, Any]:
+    environment = os.environ.copy()
+    environment["PYTHONUTF8"] = "1"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cad_workbench.job_tools",
+            action,
+            str(job_dir),
+            *arguments,
+        ],
+        cwd=job_dir,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError(completed.stderr[-2000:] or "CAD job tool returned no data")
+    try:
+        response = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(completed.stdout[-2000:]) from exc
+    if not response.get("ok"):
+        raise RuntimeError(str(response.get("error", completed.stderr[-2000:])))
+    if completed.returncode != 0:
+        response["process_warning"] = (
+            f"Inspection completed before process exit code {completed.returncode}"
+        )
+    response.pop("ok", None)
+    return response
 
 
 def _gear_code(
@@ -620,6 +779,487 @@ def create_differential_animation(
         formats=["step", "stl"],
         animation_speed=1.0,
     )
+
+
+
+@mcp.tool()
+def create_rc_4wd_drivetrain_animation(
+    animation_speed: float = 1.0,
+) -> dict[str, Any]:
+    """Generate an animated 1/10 RC 4WD drivetrain with transparent open differentials.
+
+    Includes 22T/70T primary reduction, 15T/39T final drives, treaded tires,
+    24T side gears, and 12T spider gears. Twelve animation tracks demonstrate
+    the inside/outside wheel-speed difference while cornering.
+    """
+    if not 0.1 <= animation_speed <= 10.0:
+        raise ValueError("animation_speed must be between 0.1 and 10.0")
+    return create_cad_model(
+        title="rc-4wd-transparent-real-differentials",
+        code=_rc_4wd_drivetrain_code(),
+        formats=["step", "stl"],
+        animation_speed=animation_speed,
+    )
+
+@mcp.tool()
+def list_cad_model_sources(
+    source: str = "all",
+    limit: int = 50,
+) -> dict[str, Any]:
+    """List readable CAD Python sources from examples and generated jobs."""
+    if not 1 <= limit <= 200:
+        raise ValueError("limit must be between 1 and 200")
+    entries = _model_source_entries(source)
+    models = [
+        {key: value for key, value in entry.items() if key != "_path"}
+        for entry in entries[:limit]
+    ]
+    return {"total": len(entries), "count": len(models), "models": models}
+
+
+@mcp.tool()
+def get_cad_model_source(
+    model_id: str,
+    start_line: int = 1,
+    max_lines: int = 500,
+) -> dict[str, Any]:
+    """Read a safe line range from a CAD Python source selected by model ID."""
+    if start_line < 1:
+        raise ValueError("start_line must be at least 1")
+    if not 1 <= max_lines <= 500:
+        raise ValueError("max_lines must be between 1 and 500")
+    path = _resolve_model_source(model_id)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start_index = min(start_line - 1, len(lines))
+    end_index = min(start_index + max_lines, len(lines))
+    content = "\n".join(lines[start_index:end_index])
+    return {
+        "model_id": model_id,
+        "start_line": start_index + 1 if lines else 0,
+        "end_line": end_index,
+        "total_lines": len(lines),
+        "has_more": end_index < len(lines),
+        "content": content,
+    }
+
+
+@mcp.tool()
+def search_cad_model_sources(
+    query: str,
+    source: str = "all",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Search CAD Python sources and return the first matching line per model."""
+    query = query.strip()
+    if not query or len(query) > 100:
+        raise ValueError("query must contain between 1 and 100 characters")
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    needle = query.casefold()
+    matches: list[dict[str, Any]] = []
+    for entry in _model_source_entries(source):
+        lines = entry["_path"].read_text(encoding="utf-8").splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            if needle in line.casefold():
+                matches.append(
+                    {
+                        "model_id": entry["model_id"],
+                        "line": line_number,
+                        "snippet": line.strip()[:240],
+                    }
+                )
+                break
+        if len(matches) >= limit:
+            break
+    return {"query": query, "count": len(matches), "matches": matches}
+
+
+@mcp.tool(structured_output=False)
+def get_cad_preview() -> list[TextContent | ImageContent]:
+    """Capture the current OCP CAD Viewer image and return it to the model."""
+    if not viewer_reachable():
+        raise ConnectionError(
+            f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}"
+        )
+
+    from ocp_vscode import save_screenshot
+
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+    target = (PREVIEW_DIR / f"cad-preview-{timestamp}.png").resolve()
+    save_screenshot(str(target), port=VIEWER_PORT, polling=True)
+    if not target.is_file() or target.stat().st_size == 0:
+        raise RuntimeError(
+            "OCP CAD Viewer did not return a screenshot. Open the browser view first."
+        )
+    data = base64.b64encode(target.read_bytes()).decode("ascii")
+    relative_path = target.relative_to(PROJECT_ROOT).as_posix()
+    return [
+        TextContent(
+            text=json.dumps(
+                {
+                    "preview": relative_path,
+                    "size_bytes": target.stat().st_size,
+                    "viewer_port": VIEWER_PORT,
+                },
+                ensure_ascii=False,
+            )
+        ),
+        ImageContent(data=data, mimeType="image/png"),
+    ]
+
+@mcp.tool()
+def inspect_cad_geometry(model_id: str | None = None) -> dict[str, Any]:
+    """Inspect exact STEP geometry for a generated job, defaulting to the latest job."""
+    import cadquery as cq
+
+    resolved_id, step_path = _resolve_step_source(model_id)
+    shape = cq.importers.importStep(str(step_path)).val()
+    bounding_box = shape.BoundingBox()
+    center = shape.Center()
+    valid = bool(shape.isValid())
+    volume = float(shape.Volume())
+    size = {
+        "x": round(float(bounding_box.xlen), 6),
+        "y": round(float(bounding_box.ylen), 6),
+        "z": round(float(bounding_box.zlen), 6),
+    }
+    warnings: list[str] = []
+    if not valid:
+        warnings.append("OpenCascade reports an invalid shape")
+    if volume <= 0:
+        warnings.append("The imported shape has no positive volume")
+    collapsed_axes = [axis for axis, length in size.items() if length <= 1e-6]
+    if collapsed_axes:
+        warnings.append(f"Near-zero bounding-box axes: {', '.join(collapsed_axes)}")
+
+    return {
+        "model_id": resolved_id,
+        "step_file": f"jobs/{step_path.parent.name}/model.step",
+        "units": "mm",
+        "valid": valid,
+        "shape_type": shape.ShapeType(),
+        "bounding_box_mm": {
+            "min": {
+                "x": round(float(bounding_box.xmin), 6),
+                "y": round(float(bounding_box.ymin), 6),
+                "z": round(float(bounding_box.zmin), 6),
+            },
+            "max": {
+                "x": round(float(bounding_box.xmax), 6),
+                "y": round(float(bounding_box.ymax), 6),
+                "z": round(float(bounding_box.zmax), 6),
+            },
+            "size": size,
+        },
+        "volume_mm3": round(volume, 6),
+        "surface_area_mm2": round(float(shape.Area()), 6),
+        "center_of_mass_mm": {
+            "x": round(float(center.x), 6),
+            "y": round(float(center.y), 6),
+            "z": round(float(center.z), 6),
+        },
+        "topology": {
+            "solids": len(shape.Solids()),
+            "faces": len(shape.Faces()),
+            "edges": len(shape.Edges()),
+            "vertices": len(shape.Vertices()),
+        },
+        "step_size_bytes": step_path.stat().st_size,
+        "warnings": warnings,
+    }
+
+
+
+
+@mcp.tool()
+def detect_cad_interference(
+    model_id: str | None = None,
+    clearance_mm: float = 0.0,
+    max_results: int = 100,
+    max_candidate_pairs: int = 5000,
+    volume_tolerance_mm3: float = 1e-6,
+) -> dict[str, Any]:
+    """Detect solid overlaps and optional clearance violations in a STEP job."""
+    import cadquery as cq
+
+    if not 0.0 <= clearance_mm <= 1000.0:
+        raise ValueError("clearance_mm must be between 0 and 1000")
+    if not 1 <= max_results <= 1000:
+        raise ValueError("max_results must be between 1 and 1000")
+    if not 1 <= max_candidate_pairs <= 100000:
+        raise ValueError("max_candidate_pairs must be between 1 and 100000")
+    if not 0.0 <= volume_tolerance_mm3 <= 1.0:
+        raise ValueError("volume_tolerance_mm3 must be between 0 and 1")
+
+    resolved_id, step_path = _resolve_step_source(model_id)
+    shape = cq.importers.importStep(str(step_path)).val()
+    solids = list(shape.Solids())
+    boxes = [solid.BoundingBox() for solid in solids]
+
+    def boxes_are_candidates(first: Any, second: Any) -> bool:
+        margin = clearance_mm
+        return not (
+            first.xmax + margin < second.xmin
+            or second.xmax + margin < first.xmin
+            or first.ymax + margin < second.ymin
+            or second.ymax + margin < first.ymin
+            or first.zmax + margin < second.zmin
+            or second.zmax + margin < first.zmin
+        )
+
+    findings: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    broad_phase_candidates = 0
+    exact_pairs_checked = 0
+    interference_count = 0
+    clearance_violation_count = 0
+    candidate_limit_reached = False
+    result_limit_reached = False
+
+    for first_index, first in enumerate(solids):
+        if candidate_limit_reached or result_limit_reached:
+            break
+        for second_index in range(first_index + 1, len(solids)):
+            if not boxes_are_candidates(boxes[first_index], boxes[second_index]):
+                continue
+            if broad_phase_candidates >= max_candidate_pairs:
+                candidate_limit_reached = True
+                break
+            broad_phase_candidates += 1
+            second = solids[second_index]
+            try:
+                common = first.intersect(second)
+                overlap_volume = float(common.Volume())
+                exact_pairs_checked += 1
+                if overlap_volume > volume_tolerance_mm3:
+                    interference_count += 1
+                    findings.append(
+                        {
+                            "type": "interference",
+                            "solid_a": f"solid_{first_index:03d}",
+                            "solid_b": f"solid_{second_index:03d}",
+                            "overlap_volume_mm3": round(overlap_volume, 6),
+                        }
+                    )
+                elif clearance_mm > 0.0:
+                    distance = float(first.distance(second))
+                    if distance < clearance_mm:
+                        clearance_violation_count += 1
+                        findings.append(
+                            {
+                                "type": "clearance_violation",
+                                "solid_a": f"solid_{first_index:03d}",
+                                "solid_b": f"solid_{second_index:03d}",
+                                "distance_mm": round(distance, 6),
+                                "required_clearance_mm": clearance_mm,
+                            }
+                        )
+            except Exception as exc:  # noqa: BLE001 - isolate OpenCascade pair failures
+                warnings.append(
+                    f"solid_{first_index:03d}/solid_{second_index:03d}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            if len(findings) >= max_results:
+                result_limit_reached = True
+                break
+
+    truncated = candidate_limit_reached or result_limit_reached
+    if candidate_limit_reached:
+        warnings.append(
+            f"Stopped after max_candidate_pairs={max_candidate_pairs} candidate pairs"
+        )
+    if result_limit_reached:
+        warnings.append(f"Stopped after max_results={max_results} findings")
+
+    return {
+        "model_id": resolved_id,
+        "step_file": f"jobs/{step_path.parent.name}/model.step",
+        "units": "mm",
+        "solid_count": len(solids),
+        "clearance_mm": clearance_mm,
+        "broad_phase_candidates": broad_phase_candidates,
+        "exact_pairs_checked": exact_pairs_checked,
+        "interference_count": interference_count,
+        "clearance_violation_count": clearance_violation_count,
+        "finding_count": len(findings),
+        "truncated": truncated,
+        "findings": findings,
+        "warnings": warnings,
+        "limitations": [
+            "Checks imported STEP solids, not named assembly components.",
+            (
+                "STEP import may lose component names and hierarchy, so intentional "
+                "same-part overlaps can be reported."
+            ),
+            "Touching faces are not interference unless positive overlap volume exists.",
+        ],
+    }
+
+
+
+@mcp.tool()
+def list_cad_components(model_id: str | None = None) -> dict[str, Any]:
+    """List named assembly components and world-space bounds for a generated CAD job.
+
+    Call this before inspect_component_clearance to obtain exact component paths.
+    Defaults to the latest generated job.
+    """
+    resolved_id, job_dir = _resolve_job_dir(model_id)
+    response = _run_job_tool("list", job_dir)
+    return {
+        "model_id": resolved_id,
+        "units": "mm",
+        **response,
+    }
+
+
+@mcp.tool()
+def inspect_component_clearance(
+    model_id: str,
+    component_a: str,
+    component_b: str,
+    required_clearance_mm: float = 0.5,
+) -> dict[str, Any]:
+    """Measure overlap volume and minimum clearance between two named components.
+
+    Use paths returned by list_cad_components. A result is interference when overlap
+    volume is positive, insufficient_clearance when the measured gap is below the
+    requested value, and pass otherwise.
+    """
+    if not 0.0 <= required_clearance_mm <= 1000.0:
+        raise ValueError("required_clearance_mm must be between 0 and 1000")
+    resolved_id, job_dir = _resolve_job_dir(model_id)
+    response = _run_job_tool(
+        "clearance",
+        job_dir,
+        component_a,
+        component_b,
+        str(required_clearance_mm),
+    )
+    return {
+        "model_id": resolved_id,
+        "units": "mm",
+        **response,
+    }
+
+
+@mcp.tool()
+def show_cad_job(
+    model_id: str | None = None,
+    with_animation: bool = True,
+    reset_camera: bool = True,
+) -> dict[str, Any]:
+    """Redisplay a generated job in the existing OCP Viewer tab without opening a tab.
+
+    Set with_animation=true to restore its timeline. The tool never launches a browser;
+    open http://127.0.0.1:3939 once and reuse that tab.
+    """
+    resolved_id, job_dir = _resolve_job_dir(model_id)
+    response = _run_job_tool(
+        "show",
+        job_dir,
+        "1" if with_animation else "0",
+        "1" if reset_camera else "0",
+    )
+    return {
+        "model_id": resolved_id,
+        "reused_existing_tab": True,
+        **response,
+    }
+
+@mcp.tool(structured_output=False)
+def get_cad_views(
+    views: list[str] | None = None,
+) -> list[TextContent | ImageContent]:
+    """Capture multiple standard OCP CAD Viewer camera views as MCP images."""
+    import time
+
+    if not viewer_reachable():
+        raise ConnectionError(
+            f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}"
+        )
+
+    from ocp_vscode import Camera, save_screenshot, set_viewer_config, status
+
+    camera_by_name = {
+        "iso": Camera.ISO,
+        "front": Camera.FRONT,
+        "back": Camera.BACK,
+        "left": Camera.LEFT,
+        "right": Camera.RIGHT,
+        "top": Camera.TOP,
+        "bottom": Camera.BOTTOM,
+    }
+    requested = views if views is not None else ["iso", "front", "right", "top"]
+    if not requested:
+        raise ValueError("views must contain at least one camera name")
+    normalized = [view.strip().lower() for view in requested]
+    invalid = [view for view in normalized if view not in camera_by_name]
+    if invalid:
+        raise ValueError(
+            "unsupported views: "
+            + ", ".join(invalid)
+            + "; choose from "
+            + ", ".join(camera_by_name)
+        )
+    normalized = list(dict.fromkeys(normalized))
+
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+    original = status(port=VIEWER_PORT)
+    captures: list[dict[str, Any]] = []
+    images: list[ImageContent] = []
+    try:
+        for view in normalized:
+            set_viewer_config(
+                reset_camera=camera_by_name[view],
+                port=VIEWER_PORT,
+            )
+            time.sleep(0.35)
+            target = (PREVIEW_DIR / f"cad-{view}-{timestamp}.png").resolve()
+            save_screenshot(str(target), port=VIEWER_PORT, polling=True)
+            if not target.is_file() or target.stat().st_size == 0:
+                raise RuntimeError(f"OCP CAD Viewer did not return the {view} screenshot")
+            relative_path = target.relative_to(PROJECT_ROOT).as_posix()
+            captures.append(
+                {
+                    "view": view,
+                    "preview": relative_path,
+                    "size_bytes": target.stat().st_size,
+                }
+            )
+            images.append(
+                ImageContent(
+                    data=base64.b64encode(target.read_bytes()).decode("ascii"),
+                    mimeType="image/png",
+                )
+            )
+    finally:
+        if isinstance(original, dict):
+            restore = {
+                key: original[key]
+                for key in ("position", "quaternion", "target", "zoom")
+                if key in original
+            }
+            set_viewer_config(
+                **restore,
+                reset_camera=Camera.KEEP,
+                port=VIEWER_PORT,
+            )
+
+    metadata = TextContent(
+        text=json.dumps(
+            {
+                "viewer_port": VIEWER_PORT,
+                "view_count": len(captures),
+                "captures": captures,
+                "camera_restored": isinstance(original, dict),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return [metadata, *images]
 
 
 @mcp.tool()
