@@ -92,7 +92,7 @@ def _densify_rotation_track(
 
 
 def _show_and_animate(result: Any, tracks: list[dict[str, Any]], speed: float) -> int:
-    from ocp_vscode import Animation, set_port, show, status
+    from ocp_vscode import Animation, set_port, show
 
     if not viewer_reachable():
         raise ConnectionError(
@@ -100,21 +100,26 @@ def _show_and_animate(result: Any, tracks: list[dict[str, Any]], speed: float) -
             "先に C:\\V8_CAD\\start.ps1 を実行してください。"
         )
     set_port(VIEWER_PORT)
-    browser_ready = False
-    for _attempt in range(20):
+    last_show_error: Exception | None = None
+    for attempt in range(20):
         try:
-            browser_ready = bool(status(port=VIEWER_PORT))
-        except (OSError, RuntimeError, ValueError):
-            browser_ready = False
-        if browser_ready:
+            show(result, reset_camera=True, port=VIEWER_PORT)
             break
-        time.sleep(0.25)
-    if not browser_ready:
-        raise ConnectionError(
-            "OCP CAD Viewerのブラウザ画面が未接続です。"
-            f"http://{VIEWER_HOST}:{VIEWER_PORT} を開いてから再実行してください。"
+        except (ConnectionError, OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            last_show_error = exc
+            if attempt < 19:
+                time.sleep(0.25)
+    else:
+        detail = (
+            f" ({type(last_show_error).__name__}: {last_show_error})"
+            if last_show_error is not None
+            else ""
         )
-    show(result, reset_camera=True)
+        raise ConnectionError(
+            "OCP CAD Viewerへモデルを送信できません。"
+            f"http://{VIEWER_HOST}:{VIEWER_PORT} を開いてから再実行してください。"
+            f"{detail}"
+        )
     if not tracks:
         return 0
     animation = Animation()
@@ -123,9 +128,7 @@ def _show_and_animate(result: Any, tracks: list[dict[str, Any]], speed: float) -
         times = [float(item) for item in track["times"]]
         values = track["values"]
         if action in {"rx", "ry", "rz"}:
-            times, values = _densify_rotation_track(
-                times, [float(item) for item in values]
-            )
+            times, values = _densify_rotation_track(times, [float(item) for item in values])
         animation.add_track(
             str(track["path"]),
             action,
@@ -145,9 +148,14 @@ def run(payload_path: Path) -> dict[str, Any]:
     script_path = output_dir / "model.py"
     script_path.write_text(code, encoding="utf-8")
     requested_steps = _normalize_steps(payload.get("steps", [])) or extract_literal_steps(code)
-    write_state(status="running", title=payload.get("title", "CAD model"),
-                message="CadQueryモデルを生成しています", steps=requested_steps,
-                current_step=0 if requested_steps else -1, job_dir=str(output_dir))
+    write_state(
+        status="running",
+        title=payload.get("title", "CAD model"),
+        message="CadQueryモデルを生成しています",
+        steps=requested_steps,
+        current_step=0 if requested_steps else -1,
+        job_dir=str(output_dir),
+    )
 
     current_step = -1
 
@@ -178,14 +186,24 @@ def run(payload_path: Path) -> dict[str, Any]:
         raise TypeError("animation はトラック辞書のlistで指定してください")
     exported = _export(namespace["result"], output_dir, payload.get("formats", ["step"]))
     animated = _show_and_animate(namespace["result"], tracks, payload.get("speed", 1.0))
-    response = {"ok": True, "job_dir": str(output_dir), "script": str(script_path),
-                "exports": exported, "steps": steps, "animation_tracks": animated}
+    response = {
+        "ok": True,
+        "job_dir": str(output_dir),
+        "script": str(script_path),
+        "exports": exported,
+        "steps": steps,
+        "animation_tracks": animated,
+    }
     (output_dir / "result.json").write_text(
-        json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_state(status="complete",
-                message=f"完了 — export {len(exported)}件 / animation {animated}トラック",
-                current_step=len(steps) - 1 if steps else -1,
-                viewer_connected=True, viewer_port=VIEWER_PORT)
+        json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    write_state(
+        status="complete",
+        message=f"完了 — export {len(exported)}件 / animation {animated}トラック",
+        current_step=len(steps) - 1 if steps else -1,
+        viewer_connected=True,
+        viewer_port=VIEWER_PORT,
+    )
     return response
 
 
@@ -195,8 +213,12 @@ def main() -> int:
         return 0
     except Exception as exc:  # noqa: BLE001 - subprocess boundary returns diagnostics to MCP
         write_state(status="error", message=str(exc))
-        print(json.dumps({"ok": False, "error": str(exc),
-                          "traceback": traceback.format_exc()}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"ok": False, "error": str(exc), "traceback": traceback.format_exc()},
+                ensure_ascii=False,
+            )
+        )
         return 1
 
 
