@@ -126,3 +126,53 @@ Keep these measured minimum distances:
 joints. Do not judge the assembly only by the total finding count. For suspicious
 named parts, measure both `intersect(...).Volume()` and `distance(...)` on the
 source Shapes.
+## 8. cad-workbench MCP実装記録
+
+2026-08-29時点の主要実装は、最重要コミット af05da9
+(feat: add RC drivetrain and named CAD inspection APIs) に保存されている。
+MCPサーバー本体は src/cad_workbench/server.py、生成済みジョブを再実行して
+名前付き部品を検査する補助処理は src/cad_workbench/job_tools.py にある。
+RC 4WDモデル本体は examples/rc_4wd_drivetrain.py に分離し、説明は
+docs/rc_4wd_drivetrain.md、Claude向け入口は CLAUDE.md に記録している。
+
+### 公開MCPツール
+
+- 汎用生成: create_cad_model, get_cad_status, viewer_help
+- 既製アニメーション: create_gear_animation, create_bevel_gear_animation,
+  create_differential_animation, create_rc_4wd_drivetrain_animation
+- モデルソース発見・読取: list_cad_model_sources, get_cad_model_source,
+  search_cad_model_sources
+- 目視確認: get_cad_preview, get_cad_views, show_cad_job
+- 形状検査: inspect_cad_geometry, detect_cad_interference
+- 名前付き部品検査: list_cad_components, inspect_component_clearance
+
+create_cad_model はCadQueryコードを検査して別プロセスで実行し、最終変数 result を
+OCP CAD Viewerへ送り、STEP/STLとリクエスト・結果を jobs/ に保存する。コード内で
+cad_step(label) を呼ぶと工程状態を更新できる。アニメーションはAssemblyの名前階層に
+一致する path と、tx/ty/tz/t/rx/ry/rz/q のトラックで渡す。
+
+### Claude/Codexの標準作業フロー
+
+1. 再利用可能なモデルを list_cad_model_sources / search_cad_model_sources で探し、
+   必要箇所を get_cad_model_source で読む。
+2. 既製ツール、または create_cad_model でモデルを生成する。
+3. get_cad_status で完了、出力先、Viewer接続状態、実行エラーを確認する。
+4. 既存ジョブの再表示は show_cad_job を使う。これはブラウザータブを増やさず、
+   既存の http://127.0.0.1:3939 タブを再利用する。
+5. 生成直後は必ず inspect_cad_geometry と detect_cad_interference を呼び、
+   妥当性と物理干渉を数値で確認する。
+6. アセンブリでは list_cad_components で正確な部品パスを取得し、疑わしい組を
+   inspect_component_clearance で個別検査する。
+7. get_cad_preview または get_cad_views でClaude/Codex自身が画像を確認し、
+   数値検査と目視確認の両方を満たしてから完了とする。
+
+### Viewerと検査上の注意
+
+- OCP CAD Viewerの既定ポートは3939。画像取得・再表示にはViewerが起動済みであること。
+- show_cad_job はViewerへ再送するが、ブラウザーを自動起動しない。
+- get_cad_views はiso/front/back/left/right/top/bottomを取得でき、既定は
+  iso/front/right/top。
+- flattenされたSTEPに対する detect_cad_interference は部品名と階層を失うため、
+  歯のソリッドや意図した結合まで検出する場合がある。総件数だけで合否を決めない。
+- 名前が必要な判定は list_cad_components と inspect_component_clearance を優先する。
+- MCPツール追加後にClaude Code側へ一覧が反映されない場合は、MCP接続を再接続する。
