@@ -13,6 +13,7 @@ def test_lists_and_reads_example_sources() -> None:
     entries = _model_source_entries("examples")
     ids = {entry["model_id"] for entry in entries}
     assert "example:rc_4wd_drivetrain" in ids
+    assert "example:screw_gear_pair" in ids
 
     listing = list_cad_model_sources(source="examples", limit=10)
     assert listing["count"] >= 1

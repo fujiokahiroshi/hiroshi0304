@@ -28,11 +28,17 @@ mcp = MCPServer(
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RC_4WD_TEMPLATE = PROJECT_ROOT / "examples" / "rc_4wd_drivetrain.py"
+SCREW_GEAR_TEMPLATE = PROJECT_ROOT / "examples" / "screw_gear_pair.py"
 PREVIEW_DIR = PROJECT_ROOT / "runtime" / "previews"
 
 
 def _rc_4wd_drivetrain_code() -> str:
     return RC_4WD_TEMPLATE.read_text(encoding="utf-8")
+
+
+def _screw_gear_code() -> str:
+    return SCREW_GEAR_TEMPLATE.read_text(encoding="utf-8")
+
 
 MODEL_ID_PATTERN = re.compile(r"^(example|job):([A-Za-z0-9_-]+)$")
 
@@ -53,9 +59,7 @@ def _model_source_entries(source: str = "all") -> list[dict[str, Any]]:
                     "source": "examples",
                     "name": resolved.stem,
                     "relative_path": resolved.relative_to(PROJECT_ROOT).as_posix(),
-                    "modified": datetime.fromtimestamp(stat.st_mtime)
-                    .astimezone()
-                    .isoformat(),
+                    "modified": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
                     "size_bytes": stat.st_size,
                     "exports": [],
                     "_path": resolved,
@@ -77,9 +81,7 @@ def _model_source_entries(source: str = "all") -> list[dict[str, Any]]:
                     "source": "jobs",
                     "name": resolved.parent.name,
                     "relative_path": resolved.relative_to(PROJECT_ROOT).as_posix(),
-                    "modified": datetime.fromtimestamp(stat.st_mtime)
-                    .astimezone()
-                    .isoformat(),
+                    "modified": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
                     "size_bytes": stat.st_size,
                     "exports": exports,
                     "_path": resolved,
@@ -104,6 +106,7 @@ def _resolve_model_source(model_id: str) -> Path:
         raise ValueError(f"CAD model source not found: {model_id}")
     return candidate
 
+
 def _resolve_step_source(model_id: str | None = None) -> tuple[str, Path]:
     if model_id is None:
         candidates = [path.resolve() for path in JOBS_DIR.glob("*/model.step")]
@@ -121,9 +124,6 @@ def _resolve_step_source(model_id: str | None = None) -> tuple[str, Path]:
     if step_path.parent != allowed_parent or not step_path.is_file():
         raise ValueError(f"STEP model not found: {model_id}")
     return model_id, step_path
-
-
-
 
 
 def _resolve_job_dir(model_id: str | None = None) -> tuple[str, Path]:
@@ -199,8 +199,10 @@ def _gear_code(
     segments = max(1, math.ceil(max(abs(rotation_a), abs(rotation_b)) / 90.0))
     timeline = [duration * index / segments for index in range(segments + 1)]
     values_a = [rotation_a * index / segments for index in range(segments + 1)]
-    values_b = [0.0 if index == 0 else rotation_b * index / segments for index in range(segments + 1)]
-    return f'''import cadquery as cq
+    values_b = [
+        0.0 if index == 0 else rotation_b * index / segments for index in range(segments + 1)
+    ]
+    return f"""import cadquery as cq
 import math
 
 steps = [
@@ -282,7 +284,7 @@ animation = [
         "values": {values_b!r},
     }},
 ]
-'''
+"""
 
 
 def _bevel_gear_code(
@@ -299,8 +301,10 @@ def _bevel_gear_code(
     segments = max(1, math.ceil(max(abs(rotation_a), abs(rotation_b)) / 90.0))
     timeline = [duration * index / segments for index in range(segments + 1)]
     values_a = [rotation_a * index / segments for index in range(segments + 1)]
-    values_b = [0.0 if index == 0 else rotation_b * index / segments for index in range(segments + 1)]
-    return f'''import cadquery as cq
+    values_b = [
+        0.0 if index == 0 else rotation_b * index / segments for index in range(segments + 1)
+    ]
+    return f"""import cadquery as cq
 import math
 
 steps = [
@@ -421,7 +425,7 @@ animation = [
         "values": {values_b!r},
     }},
 ]
-'''
+"""
 
 
 def _differential_code(
@@ -441,8 +445,7 @@ def _differential_code(
     segments = max(
         1,
         math.ceil(
-            max(abs(left_angle), abs(right_angle), abs(carrier_angle), abs(spider_angle))
-            / 90.0
+            max(abs(left_angle), abs(right_angle), abs(carrier_angle), abs(spider_angle)) / 90.0
         ),
     )
     timeline = [duration * index / segments for index in range(segments + 1)]
@@ -455,7 +458,7 @@ def _differential_code(
     carrier_values = keyed(carrier_angle)
     spider_values = keyed(spider_angle)
     spider_opposite_values = keyed(-spider_angle)
-    return f'''import cadquery as cq
+    return f"""import cadquery as cq
 import math
 
 steps = [
@@ -599,7 +602,7 @@ animation = [
     {{"path": "/differential/carrier/pinion_bottom", "action": "rz",
       "times": {timeline!r}, "values": {spider_opposite_values!r}}},
 ]
-'''
+"""
 
 
 def _slug(value: str) -> str:
@@ -626,10 +629,15 @@ def create_cad_model(
     timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     output_dir = (JOBS_DIR / f"{timestamp}-{_slug(title)}").resolve()
     output_dir.mkdir(parents=True, exist_ok=False)
-    payload = {"title": title, "code": code, "steps": steps or [],
-               "formats": formats or ["step"], "animation": animation or [],
-               "speed": max(0.1, min(float(animation_speed), 10.0)),
-               "output_dir": str(output_dir)}
+    payload = {
+        "title": title,
+        "code": code,
+        "steps": steps or [],
+        "formats": formats or ["step"],
+        "animation": animation or [],
+        "speed": max(0.1, min(float(animation_speed), 10.0)),
+        "output_dir": str(output_dir),
+    }
     payload_path = output_dir / "request.json"
     payload_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     write_state(status="queued", title=title, message="ClaudeのCADジョブを開始します")
@@ -637,8 +645,14 @@ def create_cad_model(
     environment["PYTHONUTF8"] = "1"
     completed = subprocess.run(
         [sys.executable, "-m", "cad_workbench.runner", str(payload_path)],
-        cwd=output_dir, env=environment, capture_output=True, text=True,
-        encoding="utf-8", timeout=120, check=False)
+        cwd=output_dir,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     if lines:
         try:
@@ -727,9 +741,7 @@ def create_bevel_gear_animation(
         raise ValueError("回転数または再生時間が範囲外です")
     return create_cad_model(
         title=f"bevel-gear-{teeth_a}T-{teeth_b}T",
-        code=_bevel_gear_code(
-            teeth_a, teeth_b, module, face_width, bore, turns, duration
-        ),
+        code=_bevel_gear_code(teeth_a, teeth_b, module, face_width, bore, turns, duration),
         formats=["step", "stl"],
         animation_speed=1.0,
     )
@@ -781,7 +793,6 @@ def create_differential_animation(
     )
 
 
-
 @mcp.tool()
 def create_rc_4wd_drivetrain_animation(
     animation_speed: float = 1.0,
@@ -801,6 +812,26 @@ def create_rc_4wd_drivetrain_animation(
         animation_speed=animation_speed,
     )
 
+
+@mcp.tool()
+def create_screw_gear_animation(
+    animation_speed: float = 1.0,
+) -> dict[str, Any]:
+    """Generate and animate a meshed crossed-axis screw-gear pair.
+
+    Uses two 14T involute helical gears with module 2.5, 45-degree helix angles,
+    perpendicular Z/X axes, and synchronized two-track rotation.
+    """
+    if not 0.1 <= animation_speed <= 10.0:
+        raise ValueError("animation_speed must be between 0.1 and 10.0")
+    return create_cad_model(
+        title="screw-gear-pair-14T-14T",
+        code=_screw_gear_code(),
+        formats=["step", "stl"],
+        animation_speed=animation_speed,
+    )
+
+
 @mcp.tool()
 def list_cad_model_sources(
     source: str = "all",
@@ -811,8 +842,7 @@ def list_cad_model_sources(
         raise ValueError("limit must be between 1 and 200")
     entries = _model_source_entries(source)
     models = [
-        {key: value for key, value in entry.items() if key != "_path"}
-        for entry in entries[:limit]
+        {key: value for key, value in entry.items() if key != "_path"} for entry in entries[:limit]
     ]
     return {"total": len(entries), "count": len(models), "models": models}
 
@@ -878,9 +908,7 @@ def search_cad_model_sources(
 def get_cad_preview() -> list[TextContent | ImageContent]:
     """Capture the current OCP CAD Viewer image and return it to the model."""
     if not viewer_reachable():
-        raise ConnectionError(
-            f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}"
-        )
+        raise ConnectionError(f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}")
 
     from ocp_vscode import save_screenshot
 
@@ -907,6 +935,7 @@ def get_cad_preview() -> list[TextContent | ImageContent]:
         ),
         ImageContent(data=data, mimeType="image/png"),
     ]
+
 
 @mcp.tool()
 def inspect_cad_geometry(model_id: str | None = None) -> dict[str, Any]:
@@ -968,8 +997,6 @@ def inspect_cad_geometry(model_id: str | None = None) -> dict[str, Any]:
         "step_size_bytes": step_path.stat().st_size,
         "warnings": warnings,
     }
-
-
 
 
 @mcp.tool()
@@ -1057,8 +1084,7 @@ def detect_cad_interference(
                         )
             except Exception as exc:  # noqa: BLE001 - isolate OpenCascade pair failures
                 warnings.append(
-                    f"solid_{first_index:03d}/solid_{second_index:03d}: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"solid_{first_index:03d}/solid_{second_index:03d}: {type(exc).__name__}: {exc}"
                 )
             if len(findings) >= max_results:
                 result_limit_reached = True
@@ -1066,9 +1092,7 @@ def detect_cad_interference(
 
     truncated = candidate_limit_reached or result_limit_reached
     if candidate_limit_reached:
-        warnings.append(
-            f"Stopped after max_candidate_pairs={max_candidate_pairs} candidate pairs"
-        )
+        warnings.append(f"Stopped after max_candidate_pairs={max_candidate_pairs} candidate pairs")
     if result_limit_reached:
         warnings.append(f"Stopped after max_results={max_results} findings")
 
@@ -1095,7 +1119,6 @@ def detect_cad_interference(
             "Touching faces are not interference unless positive overlap volume exists.",
         ],
     }
-
 
 
 @mcp.tool()
@@ -1168,6 +1191,7 @@ def show_cad_job(
         **response,
     }
 
+
 @mcp.tool(structured_output=False)
 def get_cad_views(
     views: list[str] | None = None,
@@ -1176,9 +1200,7 @@ def get_cad_views(
     import time
 
     if not viewer_reachable():
-        raise ConnectionError(
-            f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}"
-        )
+        raise ConnectionError(f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}")
 
     from ocp_vscode import Camera, save_screenshot, set_viewer_config, status
 
@@ -1268,8 +1290,12 @@ def viewer_help() -> dict[str, Any]:
     return {
         "result": "最終オブジェクトを result に代入",
         "steps": "steps = ['ベース作成', '穴加工', '組立']",
-        "animation": {"path": "/assembly/part-name", "action": "tx|ty|tz|t|rx|ry|rz|q",
-                      "times": [0.0, 1.0, 2.0], "values": [0.0, 20.0, 0.0]},
+        "animation": {
+            "path": "/assembly/part-name",
+            "action": "tx|ty|tz|t|rx|ry|rz|q",
+            "times": [0.0, 1.0, 2.0],
+            "values": [0.0, 20.0, 0.0],
+        },
         "note": "animation pathは直前にshowしたAssemblyの名前階層と一致させます",
     }
 

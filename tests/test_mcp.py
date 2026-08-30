@@ -15,6 +15,7 @@ async def test_mcp_lists_and_calls_tools() -> None:
             "create_differential_animation",
             "create_gear_animation",
             "create_rc_4wd_drivetrain_animation",
+            "create_screw_gear_animation",
             "get_cad_status",
             "viewer_help",
             "get_cad_preview",

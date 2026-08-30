@@ -47,6 +47,7 @@ Claude DesktopへMCPを再登録する場合:
 - `create_bevel_gear_animation`: 90度で噛み合う2枚の傘歯車を連動回転させる
 - `create_differential_animation`: オープンデファレンシャルを生成・アニメーション表示する
 - `create_rc_4wd_drivetrain_animation`: Generate the RC 4WD drivetrain with transparent open differentials
+- `create_screw_gear_animation`: 直交軸で噛み合う14Tねじ歯車ペアを連動回転させる
 - `list_cad_model_sources`: List readable model.py files from examples and jobs
 - `get_cad_model_source`: Read a model source by safe ID and line range
 - `search_cad_model_sources`: Search across readable CAD Python sources

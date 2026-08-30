@@ -139,7 +139,8 @@ docs/rc_4wd_drivetrain.md、Claude向け入口は CLAUDE.md に記録してい�
 
 - 汎用生成: create_cad_model, get_cad_status, viewer_help
 - 既製アニメーション: create_gear_animation, create_bevel_gear_animation,
-  create_differential_animation, create_rc_4wd_drivetrain_animation
+  create_differential_animation, create_rc_4wd_drivetrain_animation,
+  create_screw_gear_animation
 - モデルソース発見・読取: list_cad_model_sources, get_cad_model_source,
   search_cad_model_sources
 - 目視確認: get_cad_preview, get_cad_views, show_cad_job
