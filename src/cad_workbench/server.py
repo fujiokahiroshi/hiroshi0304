@@ -31,6 +31,7 @@ RC_4WD_TEMPLATE = PROJECT_ROOT / "examples" / "rc_4wd_drivetrain.py"
 SCREW_GEAR_TEMPLATE = PROJECT_ROOT / "examples" / "screw_gear_pair.py"
 COMPOUND_PLANETARY_TEMPLATE = PROJECT_ROOT / "examples" / "compound_planetary_three_shaft.py"
 CARDAN_JOINT_TEMPLATE = PROJECT_ROOT / "examples" / "cardan_joint.py"
+DOUBLE_CARDAN_JOINT_TEMPLATE = PROJECT_ROOT / "examples" / "double_cardan_joint.py"
 PREVIEW_DIR = PROJECT_ROOT / "runtime" / "previews"
 
 
@@ -44,6 +45,10 @@ def _screw_gear_code() -> str:
 
 def _cardan_joint_code() -> str:
     return CARDAN_JOINT_TEMPLATE.read_text(encoding="utf-8")
+
+
+def _double_cardan_joint_code() -> str:
+    return DOUBLE_CARDAN_JOINT_TEMPLATE.read_text(encoding="utf-8")
 
 
 def _compound_planetary_code() -> str:
@@ -880,6 +885,30 @@ def create_cardan_joint_animation(
     return create_cad_model(
         title="cardan-joint-25deg",
         code=_cardan_joint_code(),
+        formats=["step"],
+        animation_speed=animation_speed,
+    )
+
+
+@mcp.tool()
+def create_double_cardan_joint_animation(
+    animation_speed: float = 1.0,
+) -> dict[str, Any]:
+    """Generate a double (Z-configuration) Cardan joint that restores constant velocity.
+
+    Input and output shafts are parallel, connected through an intermediate shaft
+    tilted 25 degrees from each. A single universal joint would make the far side
+    fluctuate in speed (see create_cardan_joint_animation); wiring two joints
+    through a correctly phased intermediate shaft -- its two fork hinges built
+    parallel, not twisted -- makes the second joint's non-uniformity exactly
+    cancel the first, so the output tracks the input 1:1 at every instant
+    (verified numerically to within floating-point noise).
+    """
+    if not 0.1 <= animation_speed <= 10.0:
+        raise ValueError("animation_speed must be between 0.1 and 10.0")
+    return create_cad_model(
+        title="double-cardan-joint",
+        code=_double_cardan_joint_code(),
         formats=["step"],
         animation_speed=animation_speed,
     )

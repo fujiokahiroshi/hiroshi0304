@@ -60,6 +60,7 @@ Claude DesktopへMCPを再登録する場合:
 - `show_cad_job`: Redisplay a job and animation in the existing Viewer tab without opening one
 - `create_compound_planetary_animation`: Recreate the validated blue-ring/green-carrier/yellow-sun animation using the planetary constraint.
 - `create_cardan_joint_animation`: Generate a universal (Cardan/Hooke's) joint with the correct non-constant-velocity tan(phi)=tan(theta)/cos(beta) motion. Blue `handle_yoke` is the steering handle (uniform speed); yellow `wheel_yoke` drives the wheels (derived, non-uniform speed).
+- `create_double_cardan_joint_animation`: Generate a Z-configuration double Cardan joint (input/output parallel via a phased intermediate shaft) that cancels the single joint's non-uniform velocity; output tracks input to within floating-point noise.
 - `get_cad_status`: 最新ジョブとViewer接続状態を確認する
 - `viewer_help`: モデル、工程、アニメーショントラックの形式を確認する
 

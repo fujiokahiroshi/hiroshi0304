@@ -18,6 +18,7 @@ async def test_mcp_lists_and_calls_tools() -> None:
             "create_screw_gear_animation",
             "create_compound_planetary_animation",
             "create_cardan_joint_animation",
+            "create_double_cardan_joint_animation",
             "get_cad_status",
             "viewer_help",
             "get_cad_preview",
