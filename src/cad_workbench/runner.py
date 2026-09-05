@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 import time
 import traceback
@@ -223,4 +224,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    exit_code = main()
+    # Some Windows VTK/OCP builds corrupt the heap during interpreter teardown
+    # after all CAD work and result files have already completed successfully.
+    # Flush the subprocess protocol explicitly, then skip only native teardown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)

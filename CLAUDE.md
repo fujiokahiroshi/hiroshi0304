@@ -58,6 +58,8 @@ Claude DesktopへMCPを再登録する場合:
 - `list_cad_components`: List named Assembly components and their world-space bounds
 - `inspect_component_clearance`: Measure overlap and clearance between named components
 - `show_cad_job`: Redisplay a job and animation in the existing Viewer tab without opening one
+- `create_compound_planetary_animation`: Recreate the validated blue-ring/green-carrier/yellow-sun animation using the planetary constraint.
+- `create_cardan_joint_animation`: Generate a universal (Cardan/Hooke's) joint with the correct non-constant-velocity tan(phi)=tan(theta)/cos(beta) motion. Blue `handle_yoke` is the steering handle (uniform speed); yellow `wheel_yoke` drives the wheels (derived, non-uniform speed).
 - `get_cad_status`: 最新ジョブとViewer接続状態を確認する
 - `viewer_help`: モデル、工程、アニメーショントラックの形式を確認する
 
@@ -79,3 +81,52 @@ face_width=8、bore=6、turns=2、duration=5で生成して表示する。
 - 実装変更後は `.\.venv\Scripts\python.exe -m pytest -q` を実行する
 - ユーザーの既存変更を無断で破棄・上書きしない
 
+
+## Mandatory drawing-to-mechanism reasoning process
+
+For every mechanism reconstructed from a drawing, use this order and do not skip it:
+
+1. Read labels, axes, part count, coaxial relationships, rigid groups, and every gear mesh.
+2. Show a placement-only model before designing detailed teeth, bearings, or housings.
+3. Put shapes belonging to one rigid body under one Assembly parent. The blue planetary
+   ring's inner and outer gears are one component and must always rotate together.
+4. Count degrees of freedom and choose the fixed member or two known shaft speeds before
+   calculating motion. Never assign visually convenient rotations independently.
+5. For the validated 24T sun and 56T ring arrangement, enforce:
+
+   ```text
+   24 * omega_sun + 56 * omega_ring = 80 * omega_carrier
+   ```
+
+6. Model planet revolution and self-rotation with an Assembly hierarchy: carrier parent,
+   planet child. Parent `rz` produces revolution; child `rz` is rotation relative to carrier.
+7. Add rotation markers and stable colors, then verify both numerically and visually with
+   `inspect_cad_geometry`, `detect_cad_interference`, and
+   `get_cad_preview`/`get_cad_views`.
+8. When the user corrects an interpretation, update the component model, constraints,
+   equations, and Assembly hierarchy before regenerating the animation.
+
+Validated reference job:
+
+```text
+job:20260830-180323-155819-three-output-planetary-simultaneous-animation
+```
+
+It uses blue ring = 1 turn, green carrier = 0.5 turn, yellow sun = -2/3 turn,
+with two planets revolving with the carrier while rotating relative to it.
+
+## Standard: bores must sit inside a full ring of material
+
+When cutting a pin/shaft/bolt hole through a cylindrical arm or fork prong, never
+center the hole exactly at the arm's tip. Extend the arm past the hole position by
+`hole_radius + margin` first, then cut the hole — otherwise the bore opens into a
+kite-shaped notch instead of a closed round eye. Matching the arm's own radius to a
+neighboring part's radius does not fix this; it is a tip-position problem, not a
+radius-mismatch problem. Verify with a face-on view (`get_cad_views`): the hole
+outline must read as a complete circle with background visible through it.
+
+Validated reference job:
+
+```text
+job:20260905-102244-249031-cardan-joint-prongext
+```

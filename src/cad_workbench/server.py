@@ -29,6 +29,8 @@ mcp = MCPServer(
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RC_4WD_TEMPLATE = PROJECT_ROOT / "examples" / "rc_4wd_drivetrain.py"
 SCREW_GEAR_TEMPLATE = PROJECT_ROOT / "examples" / "screw_gear_pair.py"
+COMPOUND_PLANETARY_TEMPLATE = PROJECT_ROOT / "examples" / "compound_planetary_three_shaft.py"
+CARDAN_JOINT_TEMPLATE = PROJECT_ROOT / "examples" / "cardan_joint.py"
 PREVIEW_DIR = PROJECT_ROOT / "runtime" / "previews"
 
 
@@ -38,6 +40,14 @@ def _rc_4wd_drivetrain_code() -> str:
 
 def _screw_gear_code() -> str:
     return SCREW_GEAR_TEMPLATE.read_text(encoding="utf-8")
+
+
+def _cardan_joint_code() -> str:
+    return CARDAN_JOINT_TEMPLATE.read_text(encoding="utf-8")
+
+
+def _compound_planetary_code() -> str:
+    return COMPOUND_PLANETARY_TEMPLATE.read_text(encoding="utf-8")
 
 
 MODEL_ID_PATTERN = re.compile(r"^(example|job):([A-Za-z0-9_-]+)$")
@@ -828,6 +838,49 @@ def create_screw_gear_animation(
         title="screw-gear-pair-14T-14T",
         code=_screw_gear_code(),
         formats=["step", "stl"],
+        animation_speed=animation_speed,
+    )
+
+
+@mcp.tool()
+def create_compound_planetary_animation(
+    animation_speed: float = 1.0,
+) -> dict[str, Any]:
+    """Generate the validated three-shaft compound planetary animation.
+
+    The blue ring carries rigidly connected inner and outer gear zones. A purple
+    external pinion drives it while the green carrier and yellow sun rotate under
+    the planetary constraint 24*sun + 56*ring = 80*carrier. Two planets use a
+    carrier-parent hierarchy for simultaneous revolution and relative self-spin.
+    """
+    if not 0.1 <= animation_speed <= 10.0:
+        raise ValueError("animation_speed must be between 0.1 and 10.0")
+    return create_cad_model(
+        title="compound-planetary-three-shaft",
+        code=_compound_planetary_code(),
+        formats=["step"],
+        animation_speed=animation_speed,
+    )
+
+
+@mcp.tool()
+def create_cardan_joint_animation(
+    animation_speed: float = 1.0,
+) -> dict[str, Any]:
+    """Generate a universal (Cardan/Hooke's) joint with correct non-constant-velocity motion.
+
+    Two shafts cross at a fixed 25-degree angle. The blue handle_yoke is the
+    steering handle and spins at a uniform rate; the cross (spider) and the
+    yellow wheel_yoke (drives the wheels) follow the classical relation
+    tan(phi) = tan(theta) / cos(beta), derived from the pin directions rather than
+    assumed, so the wheel-side speed visibly fluctuates within each handle revolution.
+    """
+    if not 0.1 <= animation_speed <= 10.0:
+        raise ValueError("animation_speed must be between 0.1 and 10.0")
+    return create_cad_model(
+        title="cardan-joint-25deg",
+        code=_cardan_joint_code(),
+        formats=["step"],
         animation_speed=animation_speed,
     )
 
