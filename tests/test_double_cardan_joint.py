@@ -43,3 +43,30 @@ def test_double_cardan_joint_cancels_velocity_fluctuation() -> None:
 def test_double_cardan_joint_animation_speed_validation() -> None:
     with pytest.raises(ValueError, match="animation_speed"):
         create_double_cardan_joint_animation(animation_speed=0.0)
+
+
+def test_double_cardan_joint_quaternion_tracks_are_unit_and_smooth() -> None:
+    """Regression test for a mixed-handedness bug: the cross2 rotation matrix
+    was built from a left-handed third basis column (cross(col2, col1) instead
+    of cross(col1, col2)) while its rest pose used the right-handed convention.
+    The resulting quaternions were not unit length and jumped wildly between
+    otherwise-adjacent keyframes, making the fork and cross visibly separate
+    mid-animation even though the underlying pin-direction math was correct."""
+    namespace: dict[str, object] = {
+        "cad_step": lambda *_: None,
+        "__name__": "__test__",
+    }
+    exec(compile(_double_cardan_joint_code(), "model.py", "exec"), namespace)  # noqa: S102
+
+    for track_name in ("cross1_values", "cross2_values"):
+        values = namespace[track_name]
+        for quat in values:
+            norm = sum(component * component for component in quat) ** 0.5
+            assert abs(norm - 1.0) < 1e-9, f"{track_name} has a non-unit quaternion: {quat}"
+
+        for previous, current in zip(values, values[1:]):
+            dot = sum(a * b for a, b in zip(previous, current))
+            assert abs(dot) > 0.9, (
+                f"{track_name} has a large jump between adjacent keyframes "
+                f"(|dot|={abs(dot):.3f}): {previous} -> {current}"
+            )

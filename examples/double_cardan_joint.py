@@ -383,7 +383,7 @@ for index in range(sample_count + 1):
 
     current_hinge_B = rotate_about_axis(HINGE_B0, INTERMEDIATE_AXIS, phi1_unwrap)
     p_driven2 = norm3(cross3(current_hinge_B, OUTPUT_AXIS))
-    p3b = norm3(cross3(p_driven2, current_hinge_B))
+    p3b = norm3(cross3(current_hinge_B, p_driven2))
     rest2 = mat3_from_cols(HINGE_B0, HINGE_C0, norm3(cross3(HINGE_B0, HINGE_C0)))
     current2 = mat3_from_cols(current_hinge_B, p_driven2, p3b)
     rotation2 = mat3_mul(current2, mat3_transpose(rest2))
