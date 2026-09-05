@@ -1367,6 +1367,98 @@ def get_cad_views(
 
 
 @mcp.tool()
+def get_viewer_selection() -> dict[str, Any]:
+    """Report the part last clicked in the OCP CAD Viewer.
+
+    Ask the user to click the part or spot they mean in the viewer, then call
+    this tool to read back its Assembly path, name, and world-space bounding
+    box/sphere (mm). Use this instead of asking the user to describe a 3D
+    location in words. The click persists until the next one, so if the
+    reported path does not appear under the currently shown model's Assembly
+    tree, it is stale -- ask the user to click again in the current model.
+    """
+    if not viewer_reachable():
+        raise ConnectionError(f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}")
+
+    from ocp_vscode import status as viewer_status
+
+    state = viewer_status(port=VIEWER_PORT)
+    last_pick = state.get("lastPick")
+    if not last_pick:
+        return {
+            "picked": False,
+            "message": "ビューアでまだ何もクリックされていません。パーツをクリックしてから再度呼び出してください。",
+        }
+
+    bbox = last_pick.get("boundingBox") or {}
+    bmin = bbox.get("min") or {}
+    bmax = bbox.get("max") or {}
+    sphere = last_pick.get("boundingSphere") or {}
+    center = sphere.get("center") or {}
+    return {
+        "picked": True,
+        "path": last_pick.get("path"),
+        "name": last_pick.get("name"),
+        "units": "mm",
+        "bounding_box": {
+            "min": {"x": bmin.get("x"), "y": bmin.get("y"), "z": bmin.get("z")},
+            "max": {"x": bmax.get("x"), "y": bmax.get("y"), "z": bmax.get("z")},
+        },
+        "center": {"x": center.get("x"), "y": center.get("y"), "z": center.get("z")},
+        "radius_mm": sphere.get("radius"),
+        "note": (
+            "pathが現在表示中のモデルのAssembly階層に見当たらない場合は、"
+            "古いクリックが残っている可能性があります。"
+        ),
+    }
+
+
+@mcp.tool()
+def get_viewer_state() -> dict[str, Any]:
+    """Report what the user is currently looking at in the OCP CAD Viewer.
+
+    Returns the live camera (position/target/quaternion/zoom), the animation
+    timeline's current scrub position (0..1, and the job's declared duration
+    if known), and which named Assembly paths are currently hidden. Use this
+    instead of asking the user to describe their current view, playback
+    position, or visibility toggles in words -- combine with
+    get_viewer_selection when they also click a specific part.
+    """
+    if not viewer_reachable():
+        raise ConnectionError(f"OCP CAD Viewer is not reachable at http://127.0.0.1:{VIEWER_PORT}")
+
+    from ocp_vscode import status as viewer_status
+
+    state = viewer_status(port=VIEWER_PORT)
+    position = state.get("position") or [None, None, None]
+    target = state.get("target") or [None, None, None]
+    quaternion = state.get("quaternion") or [None, None, None, None]
+    hidden_paths = [
+        path
+        for path, flags in (state.get("states") or {}).items()
+        if isinstance(flags, list) and flags and flags[0] == 0
+    ]
+    return {
+        "units": "mm",
+        "camera": {
+            "position": {"x": position[0], "y": position[1], "z": position[2]},
+            "target": {"x": target[0], "y": target[1], "z": target[2]},
+            "quaternion": {
+                "x": quaternion[0],
+                "y": quaternion[1],
+                "z": quaternion[2],
+                "w": quaternion[3],
+            },
+            "zoom": state.get("zoom"),
+            "ortho": state.get("ortho"),
+        },
+        "animation_relative_time": state.get("relative_time"),
+        "hidden_paths": hidden_paths,
+        "active_tab": state.get("tab"),
+    }
+
+
+@mcp.tool()
 def viewer_help() -> dict[str, Any]:
     """CadQueryコードとOCP animationの必須形式を返す。"""
     return {

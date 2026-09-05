@@ -20,6 +20,8 @@ async def test_mcp_lists_and_calls_tools() -> None:
             "create_cardan_joint_animation",
             "create_double_cardan_joint_animation",
             "get_cad_status",
+            "get_viewer_selection",
+            "get_viewer_state",
             "viewer_help",
             "get_cad_preview",
             "get_cad_views",
