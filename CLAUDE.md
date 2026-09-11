@@ -133,3 +133,64 @@ Validated reference job:
 ```text
 job:20260905-102244-249031-cardan-joint-prongext
 ```
+
+## Standard: external-tangent sign convention for two-circle belt/chain paths
+
+When building a closed path around two circles via their external (non-crossed)
+tangent lines — belts, chains, sprocket wraps — the tangent angle from the
+center line is
+
+```text
+gamma = acos((r_a - r_b) / d)
+```
+
+using circle A's radius minus circle B's (in that order), not `(r_b - r_a)`.
+Getting the sign backwards still produces a path that closes into a loop and
+looks fine in an isometric screenshot, but the tangent points land at the
+wrong angle and the belt secretly cuts into one of the two pulleys. This is
+invisible in a visual check; catch it with a boolean intersection between the
+belt solid and each pulley solid (`pulley.intersect(belt).val().Volume()`
+must be 0). When unsure which circle gets which wrap angle, ground-truth it
+with a convex hull of both circles' boundary point clouds (e.g.
+`scipy.spatial.ConvexHull`): the larger circle always carries the wrap angle
+greater than 180°, the smaller circle less than 180°, and each pulley wraps
+the arc that faces away from the other pulley.
+
+Validated reference:
+
+```text
+examples/timing_belt.py
+```
+
+## Standard: interference must be checked across the animation, not only at t=0
+
+For any mechanism with parts that move relative to each other, run the boolean
+intersection check at several animation times (rotate/translate the parts by their
+track values), not just in the rest pose. `examples/road_bike.py` had zero overlap
+at t=0 yet a chain-link plate rubbed the chainring face at t=5.7 s: the chainline
+skew ramp started too close to the ring, and only a link that had *left* the ring
+while still inside its tooth radius showed it. `detect_cad_interference` only sees
+the exported rest pose, so this check has to be done in Python with the same
+kinematics that generate the tracks (see the audit pattern in that session:
+`rotate(...)` each sprocket by `deg(omega*t)` and re-place each link from
+`point_at(s + v*t)`).
+
+Two related rules that came out of the same model:
+
+- A roller chain is exact rigid-body motion, not a marker approximation like a
+  belt: place each link by its two pin positions on the path, advance the path
+  parameter one pitch per tooth *angle* on sprocket arcs (`param_radius(teeth)`),
+  and let the derailleur tension pulley absorb the slack until the closed path is
+  an integer number of pitches. Phase-rotate every sprocket so a valley sits under
+  the first pin of its arc; then rollers stay in the valleys for all t.
+- When two solids are stacked laterally with sub-millimetre clearance (chain plates
+  vs cassette cogs, stem vs steerer), the lateral drift per step of any ramp (chainline
+  skew per link) must be smaller than that clearance, and a clearance bore must be
+  cut over the *entire* length where the inner part can exist -- not just the
+  nominal overlap span -- because tilted end caps reach further than their centre.
+
+Validated reference:
+
+```text
+examples/road_bike.py
+```
