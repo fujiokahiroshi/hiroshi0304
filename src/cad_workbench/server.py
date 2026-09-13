@@ -11,9 +11,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import cadquery as cq
 from mcp.server import MCPServer
 from mcp.types import ImageContent, TextContent
 
+from .gltf_export import export_assembly_to_glb
+from .runner import SAFE_BUILTINS, _safe_import
 from .state import JOBS_DIR, VIEWER_PORT, read_state, viewer_reachable, write_state
 from .validation import validate_code
 
@@ -33,6 +36,7 @@ COMPOUND_PLANETARY_TEMPLATE = PROJECT_ROOT / "examples" / "compound_planetary_th
 CARDAN_JOINT_TEMPLATE = PROJECT_ROOT / "examples" / "cardan_joint.py"
 DOUBLE_CARDAN_JOINT_TEMPLATE = PROJECT_ROOT / "examples" / "double_cardan_joint.py"
 PREVIEW_DIR = PROJECT_ROOT / "runtime" / "previews"
+UNITY_EXPORT_DIR = PROJECT_ROOT / "runtime" / "unity_exports"
 
 
 def _rc_4wd_drivetrain_code() -> str:
@@ -984,6 +988,46 @@ def search_cad_model_sources(
         if len(matches) >= limit:
             break
     return {"query": query, "count": len(matches), "matches": matches}
+
+
+@mcp.tool()
+def export_cad_model_to_unity(model_id: str | None = None) -> dict[str, Any]:
+    """Export a model's geometry AND its OCP Viewer animation as one Unity-ready .glb.
+
+    `Assembly.save(exportType="GLTF")` only writes static shapes; it does not know
+    about the `animation` track list a model.py builds for the OCP Viewer. This
+    reruns the source (same safe sandbox as create_cad_model) to recover `result`
+    and `animation`, then rebuilds the assembly hierarchy, per-part colors, and the
+    full animation timeline as glTF nodes/materials/animation channels that Unity's
+    glTF importer (glTFast or UnityGLTF) can play back directly. Defaults to the
+    most recently generated job when model_id is omitted.
+    """
+    if model_id is None:
+        model_id, _ = _resolve_job_dir(None)
+    source_path = _resolve_model_source(model_id)
+    code = source_path.read_text(encoding="utf-8")
+    validate_code(code)
+
+    namespace: dict[str, Any] = {
+        "cq": cq,
+        "cad_step": lambda _label: None,
+        "__builtins__": {**SAFE_BUILTINS, "__import__": _safe_import},
+        "__name__": "__cad_model__",
+    }
+    exec(compile(code, str(source_path), "exec"), namespace, namespace)  # noqa: S102
+    if "result" not in namespace:
+        raise ValueError("Model source has no `result` assembly")
+    result = namespace["result"]
+    if not isinstance(result, cq.Assembly):
+        result = cq.Assembly(result, name="model")
+    animation = namespace.get("animation", [])
+    if not isinstance(animation, list):
+        raise TypeError("animation must be a list of tracks")
+
+    safe_name = model_id.replace(":", "_").replace("/", "_")
+    output_path = UNITY_EXPORT_DIR / f"{safe_name}.glb"
+    stats = export_assembly_to_glb(result, animation, output_path, title=safe_name)
+    return {"model_id": model_id, **stats}
 
 
 @mcp.tool(structured_output=False)
